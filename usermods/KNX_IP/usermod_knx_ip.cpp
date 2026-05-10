@@ -1,3 +1,28 @@
+#include <stdint.h>
+
+#include "usermod_knx_ip.h"
+#include "wled.h"   // access to global 'strip' and segments
+#include "DPT.h"
+#include "esp-knx-ip.h"  // for KNX_UDP_LOG macro
+#include "src/dependencies/network/Network.h"
+#include <sys/time.h>
+
+#ifndef KNX_RECONNECT_INTERVAL
+#define KNX_RECONNECT_INTERVAL 0
+#endif
+
+#if defined(ESP32)
+  #include <esp_sntp.h>
+#endif
+
+// WLED core globals from ntp.cpp
+extern unsigned long ntpLastSyncTime;
+
+extern "C" {
+  // Dallas usermod may (optionally) provide this. If not, we'll just skip Dallas.
+  float __attribute__((weak)) wled_get_temperature_c();
+}
+
 // Helper: simple hash for config strings and segment offsets
 uint32_t KnxIpUsermod::computeGATableHash() const {
   // FNV-1a hash
@@ -18,24 +43,6 @@ uint32_t KnxIpUsermod::computeGATableHash() const {
   hash ^= segmentOffsetM; hash *= 16777619u;
   hash ^= segmentOffsetN; hash *= 16777619u;
   return hash;
-}
-#include "usermod_knx_ip.h"
-#include "wled.h"   // access to global 'strip' and segments
-#include "DPT.h"
-#include "esp-knx-ip.h"  // for KNX_UDP_LOG macro
-#include "src/dependencies/network/Network.h"
-#include <sys/time.h>
-
-#if defined(ESP32)
-  #include <esp_sntp.h>
-#endif
-
-// WLED core globals from ntp.cpp
-extern unsigned long ntpLastSyncTime;
-
-extern "C" {
-  // Dallas usermod may (optionally) provide this. If not, we'll just skip Dallas.
-  float __attribute__((weak)) wled_get_temperature_c();
 }
 
 enum class LedProfile : uint8_t { MONO = 1, CCT, RGB, RGBW, RGBCCT };
@@ -918,7 +925,7 @@ void KnxIpUsermod::onKnxRGB(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void KnxIpUsermod::onKnxEffect(uint8_t fxIndex) {
-  strip.setMode(0, fxIndex);
+  strip.getMainSegment().setMode(fxIndex);
   stateUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -994,7 +1001,10 @@ void KnxIpUsermod::adjustWhiteSplitRel(int16_t delta, bool adjustWarm) {
     // cold fraction scaled to 0..255
     newCct = (uint8_t)((cold * 255u + sum/2)/sum);
   }
-  strip.setColor(0,r,g,b,newW);
+  {
+    uint32_t _col = RGBW32(r, g, b, newW);
+    strip.getMainSegment().setColor(0, _col);
+  }
   seg.cct = newCct;
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
@@ -1019,7 +1029,10 @@ void KnxIpUsermod::onKnxColorRel(uint8_t channel, uint8_t dpt3) {
   switch(channel){case 0: tgt=&r; break; case 1: tgt=&g; break; case 2: tgt=&b; break; case 3: tgt=&w; break;}
   if (!tgt) return;
   *tgt = addClamp255(*tgt, d);
-  strip.setColor(0,r,g,b,w);
+  {
+    uint32_t _col = RGBW32(r, g, b, w);
+    strip.getMainSegment().setColor(0, _col);
+  }
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -1069,7 +1082,10 @@ void KnxIpUsermod::onKnxRGBRel(uint8_t rCtl, uint8_t gCtl, uint8_t bCtl) {
   if (dr) { int v = (int)r + dr; if (v<0) v=0; else if (v>255) v=255; r=(uint8_t)v; }
   if (dg) { int v = (int)g + dg; if (v<0) v=0; else if (v>255) v=255; g=(uint8_t)v; }
   if (db) { int v = (int)b + db; if (v<0) v=0; else if (v>255) v=255; b=(uint8_t)v; }
-  strip.setColor(0,r,g,b,w);
+  {
+    uint32_t _col = RGBW32(r, g, b, w);
+    strip.getMainSegment().setColor(0, _col);
+  }
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -1100,7 +1116,10 @@ void KnxIpUsermod::onKnxRGBWRel(uint8_t rCtl, uint8_t gCtl, uint8_t bCtl, uint8_
   if (dg) { int v = (int)g + dg; if (v<0) v=0; else if (v>255) v=255; g=(uint8_t)v; }
   if (db) { int v = (int)b + db; if (v<0) v=0; else if (v>255) v=255; b=(uint8_t)v; }
   if (dw) { int v = (int)w + dw; if (v<0) v=0; else if (v>255) v=255; w=(uint8_t)v; }
-  strip.setColor(0,r,g,b,w);
+  {
+    uint32_t _col = RGBW32(r, g, b, w);
+    strip.getMainSegment().setColor(0, _col);
+  }
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -1113,7 +1132,10 @@ void KnxIpUsermod::onKnxPreset(uint8_t preset) {
 
 void KnxIpUsermod::onKnxWhite(uint8_t v) {            // 0..255 (DPT 5.010)
   uint8_t r,g,b,w; getCurrentRGBW(r,g,b,w);
-  strip.setColor(0, r, g, b, v);
+  {
+    uint32_t _col = RGBW32(r, g, b, v);
+    strip.getMainSegment().setColor(0, _col);
+  }
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -1127,7 +1149,10 @@ void KnxIpUsermod::onKnxCct(uint16_t kelvin) {        // Kelvin (DPT 7.600)
 
 void KnxIpUsermod::applyWhiteAndCct() {
   uint8_t r,g,b,w; getCurrentRGBW(r,g,b,w);
-  strip.setColor(0, r, g, b, w); // W is already part of color; CCT is separate
+  {
+    uint32_t _col = RGBW32(r, g, b, w);
+    strip.getMainSegment().setColor(0, _col); // W is already part of color; CCT is separate
+  }
   // CCT is stored on the segment
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
 }
@@ -1145,7 +1170,10 @@ void KnxIpUsermod::onKnxWW(uint8_t v) {               // 0..255 (DPT 5.010)
 
   // apply
   uint8_t r,g,b,_w; getCurrentRGBW(r,g,b,_w);
-  strip.setColor(0, r, g, b, newW);
+  {
+    uint32_t _col = RGBW32(r, g, b, newW);
+    strip.getMainSegment().setColor(0, _col);
+  }
   strip.getSegment(0).cct = newCct;
 
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
@@ -1165,7 +1193,10 @@ void KnxIpUsermod::onKnxCW(uint8_t v) {               // 0..255 (DPT 5.010)
 
   // apply
   uint8_t r,g,b,_w; getCurrentRGBW(r,g,b,_w);
-  strip.setColor(0, r, g, b, newW);
+  {
+    uint32_t _col = RGBW32(r, g, b, newW);
+    strip.getMainSegment().setColor(0, _col);
+  }
   strip.getSegment(0).cct = newCct;
 
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
@@ -1173,7 +1204,10 @@ void KnxIpUsermod::onKnxCW(uint8_t v) {               // 0..255 (DPT 5.010)
 }
 
 void KnxIpUsermod::onKnxRGBW(uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
-  strip.setColor(0, r, g, b, w);
+  {
+    uint32_t _col = RGBW32(r, g, b, w);
+    strip.getMainSegment().setColor(0, _col);
+  }
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -1217,7 +1251,10 @@ void KnxIpUsermod::applyHSV(float hDeg, float s01, float v01, bool preserveWhite
   uint8_t r,g,b; hsvToRgb(hDeg, s01, v01, r, g, b);
   uint8_t cr,cg,cb,cw; getCurrentRGBW(cr,cg,cb,cw);
   if (!preserveWhite) cw = 0; // optional future use; currently always true
-  strip.setColor(0, r, g, b, cw);
+  {
+    uint32_t _col = RGBW32(r, g, b, cw);
+    strip.getMainSegment().setColor(0, _col);
+  }
   colorUpdated(CALL_MODE_DIRECT_CHANGE);
   scheduleStatePublish();
 }
@@ -2522,7 +2559,33 @@ if (s_lcChangedAt && (millis() - s_lcChangedAt >= 300)) {
     }
   }
 
-  KNX.loop();
+      // Periodic reconnect attempts when KNX is not running (controlled by KNX_RECONNECT_INTERVAL)
+    #if KNX_RECONNECT_INTERVAL > 0
+      static unsigned long _lastKnxReconnectAttempt = 0;
+      if (!KNX.running() && Network.isConnected()) {
+        unsigned long now = millis();
+        if (now - _lastKnxReconnectAttempt >= (unsigned long)KNX_RECONNECT_INTERVAL) {
+          _lastKnxReconnectAttempt = now;
+          KNX_UM_DEBUGLN("[KNX-UM] Attempting KNX reconnect...");
+          // lwIP safety for ESP32 WiFi
+          #ifdef ARDUINO_ARCH_ESP32
+          if (!Network.isEthernet()) {
+            delay(50);
+            if (WiFi.status() != WL_CONNECTED) {
+              KNX_UM_DEBUGLN("[KNX-UM] WiFi not connected, abort reconnect.");
+            }
+          }
+          #endif
+          if (KNX.begin()) {
+            KNX_UM_DEBUGLN("[KNX-UM] KNX reconnect succeeded");
+          } else {
+            KNX_UM_DEBUGLN("[KNX-UM] KNX reconnect failed");
+          }
+        }
+      }
+    #endif
+
+      KNX.loop();
 
   // GUI-driven changes now unified: we trigger scheduleStatePublish() elsewhere (handlers or periodic).
   // Light color/effect changes occurring outside KNX handlers rely on LAST_* snapshot differences handled
